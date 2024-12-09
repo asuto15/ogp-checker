@@ -1,0 +1,10 @@
+[package]
+name = "ogp-checker"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+image = "0.25.5"
+reqwest = { version = "0.12.9", features = ["blocking"] }
+scraper = "0.21.0"
+viuer = "0.9.1"
