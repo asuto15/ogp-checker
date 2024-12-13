@@ -26,6 +26,7 @@ pub struct OGPInfo {
 
 pub struct AppState {
     pub url: String,
+    pub cursor_position: usize,
     pub ogp_info: Option<OGPInfo>,
     pub cached_image: Option<Image>,
     pub error_message: Option<String>,
@@ -35,6 +36,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             url: String::new(),
+            cursor_position: 0,
             ogp_info: None,
             cached_image: None,
             error_message: None,
@@ -102,7 +104,11 @@ pub async fn display_ogp() {
                 .split(size);
 
             let state = state.lock().unwrap();
-            let url_input = Paragraph::new(state.url.clone())
+            let mut url_display = state.url.clone();
+            if state.cursor_position <= state.url.len() {
+                url_display.insert(state.cursor_position, '|');
+            }
+            let url_input = Paragraph::new(url_display)
                 .block(Block::default().borders(Borders::ALL).title("Enter URL"))
                 .style(Style::default());
             f.render_widget(url_input, chunks[0]);
@@ -142,17 +148,35 @@ pub async fn display_ogp() {
             match key.code {
                 KeyCode::Char(c) => {
                     let mut state = state.lock().unwrap();
-                    state.url.push(c);
+                    let cursor_position = state.cursor_position;
+                    state.url.insert(cursor_position, c);
+                    state.cursor_position += 1;
                 }
                 KeyCode::Backspace => {
                     let mut state = state.lock().unwrap();
-                    state.url.pop();
+                    let cursor_position = state.cursor_position;
+                    if cursor_position > 0 {
+                        state.url.remove(cursor_position - 1);
+                        state.cursor_position -= 1;
+                    }
+                }
+                KeyCode::Left => {
+                    let mut state = state.lock().unwrap();
+                    if state.cursor_position > 0 {
+                        state.cursor_position -= 1;
+                    }
+                }
+                KeyCode::Right => {
+                    let mut state = state.lock().unwrap();
+                    if state.cursor_position < state.url.len() {
+                        state.cursor_position += 1;
+                    }
                 }
                 KeyCode::Enter => {
-                    let state = Arc::clone(&state);
-                    let client = client.clone();
+                    let state_clone = Arc::clone(&state);
+                    let client_clone = client.clone();
                     task::spawn(async move {
-                        update_ogp(state, client).await;
+                        update_ogp(state_clone, client_clone).await;
                     });
                 }
                 KeyCode::Esc => break,
