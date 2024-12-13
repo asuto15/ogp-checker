@@ -1,5 +1,8 @@
-use ogp_checker::ogp::display_ogp;
+mod image;
+mod ogp;
+
+use ogp::display_ogp;
 
 fn main() {
-    display_ogp("https://www.asuto.dev");
+    display_ogp();
 }
