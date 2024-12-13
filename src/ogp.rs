@@ -1,5 +1,5 @@
 use crate::image::Image;
-use reqwest::blocking;
+use reqwest::Client;
 use scraper::{Html, Selector};
 use image::DynamicImage;
 use crossterm::{
@@ -14,7 +14,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, canvas::{Canvas, Rectangle}},
     Terminal,
 };
-use std::io;
+use std::{sync::{Arc, Mutex}, io};
+use tokio::task;
 
 pub struct OGPInfo {
     pub title: String,
@@ -37,26 +38,33 @@ impl AppState {
             cached_image: None,
         }
     }
+}
 
-    pub fn update_ogp(&mut self) {
-        if let Ok(info) = fetch_ogp_info(&self.url) {
-            let image_url = info.image.clone();
-            if let Ok(dynamic_img) = fetch_dynamic_image(&image_url) {
-                self.cached_image = Some(Image::from_dynamic_image(&dynamic_img));
-            }
-            self.ogp_info = Some(info);
+pub async fn update_ogp(state: Arc<Mutex<AppState>>, client: Client) {
+    let url;
+    {
+        let state = state.lock().unwrap();
+        url = state.url.clone();
+    }
+
+    if let Ok(ogp_info) = fetch_ogp_info(&client, &url).await {
+        if let Ok(dynamic_img) = fetch_dynamic_image(&client, &ogp_info.image).await {
+            let mut state = state.lock().unwrap();
+            state.ogp_info = Some(ogp_info);
+            state.cached_image = Some(Image::from_dynamic_image(&dynamic_img));
         }
     }
 }
 
-pub fn display_ogp() {
+pub async fn display_ogp() {
     enable_raw_mode().unwrap();
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).unwrap();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).unwrap();
 
-    let mut app = AppState::new();
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let client = Client::new();
 
     loop {
         terminal.draw(|f| {
@@ -69,7 +77,8 @@ pub fn display_ogp() {
                 ])
                 .split(size);
 
-            let url_input = Paragraph::new(app.url.clone())
+            let state = state.lock().unwrap();
+            let url_input = Paragraph::new(state.url.clone())
                 .block(Block::default().borders(Borders::ALL).title("Enter URL"))
                 .style(Style::default());
             f.render_widget(url_input, chunks[0]);
@@ -82,7 +91,7 @@ pub fn display_ogp() {
                 ])
                 .split(chunks[1]);
 
-            if let Some(info) = &app.ogp_info {
+            if let Some(info) = &state.ogp_info {
                 let meta_info = format!(
                     "Title: {}\nDescription: {}\nImage: {}\nMetadata: {} items",
                     info.title, info.description, info.image, info.metadata.len()
@@ -92,7 +101,7 @@ pub fn display_ogp() {
                     .block(Block::default().borders(Borders::ALL).title("OGP Info"));
                 f.render_widget(meta_paragraph, content_chunks[1]);
 
-                if let Some(cached_image) = &app.cached_image {
+                if let Some(cached_image) = &state.cached_image {
                     draw_image_with_colors(f, content_chunks[0], cached_image);
                 }
             }
@@ -100,9 +109,21 @@ pub fn display_ogp() {
 
         if let Event::Key(key) = event::read().unwrap() {
             match key.code {
-                KeyCode::Char(c) => app.url.push(c),
-                KeyCode::Backspace => { app.url.pop(); },
-                KeyCode::Enter => { app.update_ogp(); },
+                KeyCode::Char(c) => {
+                    let mut state = state.lock().unwrap();
+                    state.url.push(c);
+                }
+                KeyCode::Backspace => {
+                    let mut state = state.lock().unwrap();
+                    state.url.pop();
+                }
+                KeyCode::Enter => {
+                    let state = Arc::clone(&state);
+                    let client = client.clone();
+                    task::spawn(async move {
+                        update_ogp(state, client).await;
+                    });
+                }
                 KeyCode::Esc => break,
                 _ => {}
             }
@@ -114,57 +135,36 @@ pub fn display_ogp() {
     terminal.show_cursor().unwrap();
 }
 
-fn fetch_ogp_info(url: &str) -> Result<OGPInfo, reqwest::Error> {
-    let rc = blocking::get(url)?;
-    let contents = rc.text()?;
-
-    let document = Html::parse_document(&contents);
-    let metadata_selector = Selector::parse("meta").unwrap();
-    let title_selector = Selector::parse("meta[property='og:title']").unwrap();
-    let description_selector = Selector::parse("meta[property='og:description']").unwrap();
-    let image_selector = Selector::parse("meta[property='og:image']").unwrap();
-
-    let title = document
-        .select(&title_selector)
+async fn fetch_ogp_info(client: &Client, url: &str) -> Result<OGPInfo, reqwest::Error> {
+    let res = client.get(url).send().await?.text().await?;
+    let document = Html::parse_document(&res);
+    let title = document.select(&Selector::parse("meta[property='og:title']").unwrap())
         .next()
-        .and_then(|t| t.value().attr("content"))
-        .unwrap_or_default()
+        .and_then(|e| e.value().attr("content"))
+        .unwrap_or("")
         .to_string();
-
-    let description = document
-        .select(&description_selector)
+    let description = document.select(&Selector::parse("meta[property='og:description']").unwrap())
         .next()
-        .and_then(|d| d.value().attr("content"))
-        .unwrap_or_default()
+        .and_then(|e| e.value().attr("content"))
+        .unwrap_or("")
         .to_string();
-
-    let image = document
-        .select(&image_selector)
+    let image = document.select(&Selector::parse("meta[property='og:image']").unwrap())
         .next()
-        .and_then(|i| i.value().attr("content"))
-        .unwrap_or_default()
+        .and_then(|e| e.value().attr("content"))
+        .unwrap_or("")
         .to_string();
-
-    let metadata = document
-        .select(&metadata_selector)
-        .filter_map(|m| m.value().attr("content"))
+    let metadata = document.select(&Selector::parse("meta").unwrap())
+        .filter_map(|e| e.value().attr("content"))
         .map(|s| s.to_string())
         .collect();
 
-    Ok(OGPInfo {
-        title,
-        description,
-        image,
-        metadata,
-    })
+    Ok(OGPInfo { title, description, image, metadata })
 }
 
-fn fetch_dynamic_image(url: &str) -> Result<DynamicImage, reqwest::Error> {
-    let response = blocking::get(url)?;
-    let bytes = response.bytes()?;
-    Ok(image::load_from_memory(&bytes).unwrap())
+async fn fetch_dynamic_image(client: &Client, url: &str) -> Result<DynamicImage, reqwest::Error> {
+    let res = client.get(url).send().await?.bytes().await?;
+    Ok(image::load_from_memory(&res).unwrap())
 }
-
 fn draw_image_with_colors(
     f: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
