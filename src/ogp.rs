@@ -28,6 +28,7 @@ pub struct AppState {
     pub url: String,
     pub ogp_info: Option<OGPInfo>,
     pub cached_image: Option<Image>,
+    pub error_message: Option<String>,
 }
 
 impl AppState {
@@ -36,6 +37,15 @@ impl AppState {
             url: String::new(),
             ogp_info: None,
             cached_image: None,
+            error_message: None,
+        }
+    }
+
+    pub fn normalize_url(&self) -> String {
+        if self.url.starts_with("http://") || self.url.starts_with("https://") {
+            self.url.clone()
+        } else {
+            format!("http://{}", self.url)
         }
     }
 }
@@ -44,14 +54,27 @@ pub async fn update_ogp(state: Arc<Mutex<AppState>>, client: Client) {
     let url;
     {
         let state = state.lock().unwrap();
-        url = state.url.clone();
+        url = state.normalize_url();
     }
 
-    if let Ok(ogp_info) = fetch_ogp_info(&client, &url).await {
-        if let Ok(dynamic_img) = fetch_dynamic_image(&client, &ogp_info.image).await {
+    match fetch_ogp_info(&client, &url).await {
+        Ok(ogp_info) => {
+            match fetch_dynamic_image(&client, &ogp_info.image).await {
+                Ok(dynamic_img) => {
+                    let mut state = state.lock().unwrap();
+                    state.ogp_info = Some(ogp_info);
+                    state.cached_image = Some(Image::from_dynamic_image(&dynamic_img));
+                    state.error_message = None;
+                }
+                Err(err) => {
+                    let mut state = state.lock().unwrap();
+                    state.error_message = Some(format!("Failed to fetch image: {}", err));
+                }
+            }
+        }
+        Err(err) => {
             let mut state = state.lock().unwrap();
-            state.ogp_info = Some(ogp_info);
-            state.cached_image = Some(Image::from_dynamic_image(&dynamic_img));
+            state.error_message = Some(format!("Failed to fetch OGP info: {}", err));
         }
     }
 }
@@ -73,7 +96,8 @@ pub async fn display_ogp() {
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(3),
-                    Constraint::Percentage(97),
+                    Constraint::Length(3),
+                    Constraint::Percentage(94),
                 ])
                 .split(size);
 
@@ -83,13 +107,20 @@ pub async fn display_ogp() {
                 .style(Style::default());
             f.render_widget(url_input, chunks[0]);
 
+            if let Some(error_message) = &state.error_message {
+                let error_paragraph = Paragraph::new(error_message.clone())
+                    .block(Block::default().borders(Borders::ALL).title("Error"))
+                    .style(Style::default().fg(Color::Red));
+                f.render_widget(error_paragraph, chunks[1]);
+            }
+
             let content_chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
                     Constraint::Percentage(33),
                     Constraint::Percentage(67),
                 ])
-                .split(chunks[1]);
+                .split(chunks[2]);
 
             if let Some(info) = &state.ogp_info {
                 let meta_info = format!(
@@ -165,6 +196,7 @@ async fn fetch_dynamic_image(client: &Client, url: &str) -> Result<DynamicImage,
     let res = client.get(url).send().await?.bytes().await?;
     Ok(image::load_from_memory(&res).unwrap())
 }
+
 fn draw_image_with_colors(
     f: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
