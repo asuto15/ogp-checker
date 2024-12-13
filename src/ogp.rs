@@ -26,6 +26,7 @@ pub struct OGPInfo {
 pub struct AppState {
     pub url: String,
     pub ogp_info: Option<OGPInfo>,
+    pub cached_image: Option<Image>,
 }
 
 impl AppState {
@@ -33,11 +34,16 @@ impl AppState {
         Self {
             url: String::new(),
             ogp_info: None,
+            cached_image: None,
         }
     }
 
     pub fn update_ogp(&mut self) {
         if let Ok(info) = fetch_ogp_info(&self.url) {
+            let image_url = info.image.clone();
+            if let Ok(dynamic_img) = fetch_dynamic_image(&image_url) {
+                self.cached_image = Some(Image::from_dynamic_image(&dynamic_img));
+            }
             self.ogp_info = Some(info);
         }
     }
@@ -86,9 +92,8 @@ pub fn display_ogp() {
                     .block(Block::default().borders(Borders::ALL).title("OGP Info"));
                 f.render_widget(meta_paragraph, content_chunks[1]);
 
-                if let Ok(img) = fetch_dynamic_image(&info.image) {
-                    let img_data = Image::from_dynamic_image(&img);
-                    draw_image_with_colors(f, content_chunks[0], &img_data);
+                if let Some(cached_image) = &app.cached_image {
+                    draw_image_with_colors(f, content_chunks[0], cached_image);
                 }
             }
         }).unwrap();
