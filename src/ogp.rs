@@ -1,5 +1,5 @@
 use crate::image::Image;
-use reqwest::Client;
+use reqwest::{self, Client};
 use scraper::{Html, Selector};
 use image::DynamicImage;
 use crossterm::{
@@ -17,6 +17,7 @@ use ratatui::{
 use std::{sync::{Arc, Mutex}, io};
 use tokio::task;
 
+#[derive(Clone)]
 pub struct OGPInfo {
     pub title: String,
     pub description: String,
@@ -59,23 +60,21 @@ pub async fn update_ogp(state: Arc<Mutex<AppState>>, client: Client) {
         url = state.normalize_url();
     }
 
-    match fetch_ogp_info(&client, &url).await {
+    let ogp_result = fetch_ogp_info(&client, &url).await;
+    let dynamic_img_result = if let Ok(ref ogp_info) = ogp_result {
+        fetch_dynamic_image(&client, &ogp_info.image).await.ok()
+    } else {
+        None
+    };
+
+    let mut state = state.lock().unwrap(); // タスク内で再度ロックを取得して更新
+    match ogp_result {
         Ok(ogp_info) => {
-            match fetch_dynamic_image(&client, &ogp_info.image).await {
-                Ok(dynamic_img) => {
-                    let mut state = state.lock().unwrap();
-                    state.ogp_info = Some(ogp_info);
-                    state.cached_image = Some(Image::from_dynamic_image(&dynamic_img));
-                    state.error_message = None;
-                }
-                Err(err) => {
-                    let mut state = state.lock().unwrap();
-                    state.error_message = Some(format!("Failed to fetch image: {}", err));
-                }
-            }
+            state.ogp_info = Some(ogp_info);
+            state.cached_image = dynamic_img_result.map(Image::from_dynamic_image);
+            state.error_message = None;
         }
         Err(err) => {
-            let mut state = state.lock().unwrap();
             state.error_message = Some(format!("Failed to fetch OGP info: {}", err));
         }
     }
@@ -108,6 +107,7 @@ pub async fn display_ogp() {
             if state.cursor_position <= state.url.len() {
                 url_display.insert(state.cursor_position, '|');
             }
+
             let url_input = Paragraph::new(url_display)
                 .block(Block::default().borders(Borders::ALL).title("Enter URL"))
                 .style(Style::default());
@@ -140,6 +140,10 @@ pub async fn display_ogp() {
 
                 if let Some(cached_image) = &state.cached_image {
                     draw_image_with_colors(f, content_chunks[0], cached_image);
+                } else {
+                    let empty_paragraph = Paragraph::new("No image available")
+                        .block(Block::default().borders(Borders::ALL).title("Image"));
+                    f.render_widget(empty_paragraph, content_chunks[0]);
                 }
             }
         }).unwrap();
@@ -216,9 +220,17 @@ async fn fetch_ogp_info(client: &Client, url: &str) -> Result<OGPInfo, reqwest::
     Ok(OGPInfo { title, description, image, metadata })
 }
 
-async fn fetch_dynamic_image(client: &Client, url: &str) -> Result<DynamicImage, reqwest::Error> {
-    let res = client.get(url).send().await?.bytes().await?;
-    Ok(image::load_from_memory(&res).unwrap())
+async fn fetch_dynamic_image(client: &Client, url: &str) -> Result<DynamicImage, io::Error> {
+    let res = client.get(url).send().await.map_err(|err| {
+        io::Error::new(io::ErrorKind::Other, format!("HTTP request failed: {}", err))
+    })?;
+    let bytes = res.bytes().await.map_err(|err| {
+        io::Error::new(io::ErrorKind::Other, format!("Failed to read response body: {}", err))
+    })?;
+
+    image::load_from_memory(&bytes).map_err(|err| {
+        io::Error::new(io::ErrorKind::InvalidData, format!("Unsupported image format: {}", err))
+    })
 }
 
 fn draw_image_with_colors(
