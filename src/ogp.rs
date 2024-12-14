@@ -10,7 +10,7 @@ pub struct OGPInfo {
     pub title: String,
     pub description: String,
     pub image: String,
-    pub metadata: Vec<String>,
+    pub metadata: Vec<(String, String)>,
 }
 
 pub struct AppState {
@@ -95,8 +95,20 @@ pub async fn fetch_ogp_info(client: &Client, url: &str) -> Result<OGPInfo, reqwe
 
     let metadata = document
         .select(&Selector::parse("meta").unwrap())
-        .filter_map(|e| e.value().attr("content"))
-        .map(|s| s.to_string())
+        .filter_map(|e| {
+            let tag = e
+                .value()
+                .attr("property")
+                .or_else(|| e.value().attr("name"))
+                .unwrap_or("")
+                .to_string();
+            let content = e.value().attr("content").unwrap_or("").to_string();
+            if !tag.is_empty() {
+                Some((tag, content))
+            } else {
+                None
+            }
+        })
         .collect();
 
     Ok(OGPInfo {

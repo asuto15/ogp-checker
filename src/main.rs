@@ -3,7 +3,7 @@ mod ogp;
 mod ui;
 
 use clap::Parser;
-use ogp::{AppState, fetch_ogp_info, normalize_url, OGPInfo};
+use ogp::{fetch_ogp_info, normalize_url, AppState, OGPInfo};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use ui::UI;
@@ -11,7 +11,7 @@ use ui::UI;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(default_value="")]
+    #[arg(default_value = "")]
     url: String,
 }
 
@@ -37,7 +37,7 @@ fn print_ogp_info(ogp_info: &OGPInfo) {
     println!("Description: {}", ogp_info.description);
     println!("Image URL: {}", ogp_info.image);
     println!("Metadata:");
-    for meta in &ogp_info.metadata {
-        println!("  - {}", meta);
+    for (tag, content) in &ogp_info.metadata {
+        println!("\"{}\" - \"{}\"", tag, content);
     }
 }
