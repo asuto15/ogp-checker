@@ -177,11 +177,24 @@ pub async fn display_ogp() {
                     }
                 }
                 KeyCode::Enter => {
-                    let state_clone = Arc::clone(&state);
-                    let client_clone = client.clone();
-                    task::spawn(async move {
-                        update_ogp(state_clone, client_clone).await;
-                    });
+                    let url_is_empty;
+                    {
+                        let mut state = state.lock().unwrap();
+                        url_is_empty = state.url.is_empty();
+
+                        if url_is_empty {
+                            state.ogp_info = None;
+                            state.cached_image = None;
+                            state.error_message = None;
+                        }
+                    }
+                    if !url_is_empty {
+                        let state_clone = Arc::clone(&state); // Arc をクローン
+                        let client_clone = client.clone();
+                        task::spawn(async move {
+                            update_ogp(state_clone, client_clone).await;
+                        });
+                    }
                 }
                 KeyCode::Esc => break,
                 _ => {}
