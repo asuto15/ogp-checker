@@ -1,21 +1,24 @@
 use crate::image::Image;
-use reqwest::{self, Client};
-use scraper::{Html, Selector};
-use image::DynamicImage;
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
-    terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use image::DynamicImage;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
-    style::{Style, Color},
-    widgets::{Block, Borders, Paragraph, canvas::{Canvas, Rectangle}},
+    style::{Color, Style},
+    widgets::{
+        canvas::{Canvas, Rectangle},
+        Block, Borders, Paragraph,
+    },
     Terminal,
 };
-use std::{sync::Arc, io};
-use tokio::sync::{Mutex, watch};
+use reqwest::{self, Client};
+use scraper::{Html, Selector};
+use std::{io, sync::Arc};
+use tokio::sync::{watch, Mutex};
 
 #[derive(Clone)]
 pub struct OGPInfo {
@@ -136,16 +139,16 @@ pub async fn display_ogp() {
 
                     let content_chunks = Layout::default()
                         .direction(Direction::Horizontal)
-                        .constraints([
-                            Constraint::Percentage(33),
-                            Constraint::Percentage(67),
-                        ])
+                        .constraints([Constraint::Percentage(33), Constraint::Percentage(67)])
                         .split(chunks[2]);
 
                     if let Some(info) = &state.ogp_info {
                         let meta_info = format!(
                             "Title: {}\nDescription: {}\nImage: {}\nMetadata: {} items",
-                            info.title, info.description, info.image, info.metadata.len()
+                            info.title,
+                            info.description,
+                            info.image,
+                            info.metadata.len()
                         );
 
                         let meta_paragraph = Paragraph::new(meta_info)
@@ -246,47 +249,61 @@ pub async fn display_ogp() {
 async fn fetch_ogp_info(client: &Client, url: &str) -> Result<OGPInfo, reqwest::Error> {
     let res = client.get(url).send().await?.text().await?;
     let document = Html::parse_document(&res);
-    let title = document.select(&Selector::parse("meta[property='og:title']").unwrap())
+    let title = document
+        .select(&Selector::parse("meta[property='og:title']").unwrap())
         .next()
         .and_then(|e| e.value().attr("content"))
         .unwrap_or("")
         .to_string();
-    let description = document.select(&Selector::parse("meta[property='og:description']").unwrap())
+    let description = document
+        .select(&Selector::parse("meta[property='og:description']").unwrap())
         .next()
         .and_then(|e| e.value().attr("content"))
         .unwrap_or("")
         .to_string();
-    let image = document.select(&Selector::parse("meta[property='og:image']").unwrap())
+    let image = document
+        .select(&Selector::parse("meta[property='og:image']").unwrap())
         .next()
         .and_then(|e| e.value().attr("content"))
         .unwrap_or("")
         .to_string();
-    let metadata = document.select(&Selector::parse("meta").unwrap())
+    let metadata = document
+        .select(&Selector::parse("meta").unwrap())
         .filter_map(|e| e.value().attr("content"))
         .map(|s| s.to_string())
         .collect();
 
-    Ok(OGPInfo { title, description, image, metadata })
+    Ok(OGPInfo {
+        title,
+        description,
+        image,
+        metadata,
+    })
 }
 
 async fn fetch_dynamic_image(client: &Client, url: &str) -> Result<DynamicImage, io::Error> {
     let res = client.get(url).send().await.map_err(|err| {
-        io::Error::new(io::ErrorKind::Other, format!("HTTP request failed: {}", err))
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("HTTP request failed: {}", err),
+        )
     })?;
     let bytes = res.bytes().await.map_err(|err| {
-        io::Error::new(io::ErrorKind::Other, format!("Failed to read response body: {}", err))
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to read response body: {}", err),
+        )
     })?;
 
     image::load_from_memory(&bytes).map_err(|err| {
-        io::Error::new(io::ErrorKind::InvalidData, format!("Unsupported image format: {}", err))
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Unsupported image format: {}", err),
+        )
     })
 }
 
-fn draw_image_with_colors(
-    f: &mut ratatui::Frame,
-    area: ratatui::layout::Rect,
-    img: &Image,
-) {
+fn draw_image_with_colors(f: &mut ratatui::Frame, area: ratatui::layout::Rect, img: &Image) {
     let (target_width, target_height) = (area.width as usize, area.height as usize);
 
     let canvas = Canvas::default()
