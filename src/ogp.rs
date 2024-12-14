@@ -14,8 +14,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, canvas::{Canvas, Rectangle}},
     Terminal,
 };
-use std::{sync::{Arc, Mutex}, io};
-use tokio::task;
+use std::{sync::Arc, io};
+use tokio::sync::{Mutex, watch};
 
 #[derive(Clone)]
 pub struct OGPInfo {
@@ -56,7 +56,7 @@ impl AppState {
 pub async fn update_ogp(state: Arc<Mutex<AppState>>, client: Client) {
     let url;
     {
-        let state = state.lock().unwrap();
+        let state = state.lock().await;
         url = state.normalize_url();
     }
 
@@ -67,7 +67,7 @@ pub async fn update_ogp(state: Arc<Mutex<AppState>>, client: Client) {
         None
     };
 
-    let mut state = state.lock().unwrap(); // タスク内で再度ロックを取得して更新
+    let mut state = state.lock().await;
     match ogp_result {
         Ok(ogp_info) => {
             state.ogp_info = Some(ogp_info);
@@ -85,101 +85,127 @@ pub async fn display_ogp() {
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).unwrap();
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend).unwrap();
+    let terminal = Arc::new(tokio::sync::Mutex::new(Terminal::new(backend).unwrap()));
 
-    let state = Arc::new(Mutex::new(AppState::new()));
+    let state = Arc::new(tokio::sync::Mutex::new(AppState::new()));
     let client = Client::new();
 
-    loop {
-        terminal.draw(|f| {
-            let size = f.area();
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(3),
-                    Constraint::Length(3),
-                    Constraint::Percentage(94),
-                ])
-                .split(size);
+    let (tx, rx) = watch::channel(());
+    let rx = Arc::new(tokio::sync::Mutex::new(rx));
+    let mut needs_redraw = true;
 
-            let state = state.lock().unwrap();
-            let mut url_display = state.url.clone();
-            if state.cursor_position <= state.url.len() {
-                url_display.insert(state.cursor_position, '|');
-            }
+    let rx_clone = Arc::clone(&rx);
+    let state_clone = Arc::clone(&state);
+    let terminal_clone = Arc::clone(&terminal);
 
-            let url_input = Paragraph::new(url_display)
-                .block(Block::default().borders(Borders::ALL).title("Enter URL"))
-                .style(Style::default());
-            f.render_widget(url_input, chunks[0]);
+    tokio::spawn(async move {
+        loop {
+            if needs_redraw || rx_clone.lock().await.changed().await.is_ok() {
+                needs_redraw = false;
 
-            if let Some(error_message) = &state.error_message {
-                let error_paragraph = Paragraph::new(error_message.clone())
-                    .block(Block::default().borders(Borders::ALL).title("Error"))
-                    .style(Style::default().fg(Color::Red));
-                f.render_widget(error_paragraph, chunks[1]);
-            }
+                let state = state_clone.lock().await;
+                let mut terminal = terminal_clone.lock().await;
 
-            let content_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(33),
-                    Constraint::Percentage(67),
-                ])
-                .split(chunks[2]);
+                if let Err(e) = terminal.draw(|f| {
+                    let size = f.area();
+                    let chunks = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Length(3),
+                            Constraint::Length(3),
+                            Constraint::Percentage(94),
+                        ])
+                        .split(size);
 
-            if let Some(info) = &state.ogp_info {
-                let meta_info = format!(
-                    "Title: {}\nDescription: {}\nImage: {}\nMetadata: {} items",
-                    info.title, info.description, info.image, info.metadata.len()
-                );
+                    let mut url_display = state.url.clone();
+                    if state.cursor_position <= state.url.len() {
+                        url_display.insert(state.cursor_position, '|');
+                    }
 
-                let meta_paragraph = Paragraph::new(meta_info)
-                    .block(Block::default().borders(Borders::ALL).title("OGP Info"));
-                f.render_widget(meta_paragraph, content_chunks[1]);
+                    let url_input = Paragraph::new(url_display)
+                        .block(Block::default().borders(Borders::ALL).title("Enter URL"))
+                        .style(Style::default());
+                    f.render_widget(url_input, chunks[0]);
 
-                if let Some(cached_image) = &state.cached_image {
-                    draw_image_with_colors(f, content_chunks[0], cached_image);
-                } else {
-                    let empty_paragraph = Paragraph::new("No image available")
-                        .block(Block::default().borders(Borders::ALL).title("Image"));
-                    f.render_widget(empty_paragraph, content_chunks[0]);
+                    if let Some(error_message) = &state.error_message {
+                        let error_paragraph = Paragraph::new(error_message.clone())
+                            .block(Block::default().borders(Borders::ALL).title("Error"))
+                            .style(Style::default().fg(Color::Red));
+                        f.render_widget(error_paragraph, chunks[1]);
+                    }
+
+                    let content_chunks = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([
+                            Constraint::Percentage(33),
+                            Constraint::Percentage(67),
+                        ])
+                        .split(chunks[2]);
+
+                    if let Some(info) = &state.ogp_info {
+                        let meta_info = format!(
+                            "Title: {}\nDescription: {}\nImage: {}\nMetadata: {} items",
+                            info.title, info.description, info.image, info.metadata.len()
+                        );
+
+                        let meta_paragraph = Paragraph::new(meta_info)
+                            .block(Block::default().borders(Borders::ALL).title("OGP Info"));
+                        f.render_widget(meta_paragraph, content_chunks[1]);
+
+                        if let Some(cached_image) = &state.cached_image {
+                            draw_image_with_colors(f, content_chunks[0], cached_image);
+                        } else {
+                            let empty_paragraph = Paragraph::new("No image available")
+                                .block(Block::default().borders(Borders::ALL).title("Image"));
+                            f.render_widget(empty_paragraph, content_chunks[0]);
+                        }
+                    }
+                }) {
+                    eprintln!("Error drawing terminal: {}", e);
                 }
             }
-        }).unwrap();
+        }
+    });
 
+    loop {
         if let Event::Key(key) = event::read().unwrap() {
+            let mut should_update = false;
+
             match key.code {
                 KeyCode::Char(c) => {
-                    let mut state = state.lock().unwrap();
+                    let mut state = state.lock().await;
                     let cursor_position = state.cursor_position;
                     state.url.insert(cursor_position, c);
                     state.cursor_position += 1;
+                    should_update = true;
                 }
                 KeyCode::Backspace => {
-                    let mut state = state.lock().unwrap();
+                    let mut state = state.lock().await;
                     let cursor_position = state.cursor_position;
                     if cursor_position > 0 {
                         state.url.remove(cursor_position - 1);
                         state.cursor_position -= 1;
+                        should_update = true;
                     }
                 }
                 KeyCode::Left => {
-                    let mut state = state.lock().unwrap();
+                    let mut state = state.lock().await;
                     if state.cursor_position > 0 {
                         state.cursor_position -= 1;
+                        should_update = true;
                     }
                 }
                 KeyCode::Right => {
-                    let mut state = state.lock().unwrap();
+                    let mut state = state.lock().await;
                     if state.cursor_position < state.url.len() {
                         state.cursor_position += 1;
+                        should_update = true;
                     }
                 }
                 KeyCode::Enter => {
                     let url_is_empty;
                     {
-                        let mut state = state.lock().unwrap();
+                        let mut state = state.lock().await;
                         url_is_empty = state.url.is_empty();
 
                         if url_is_empty {
@@ -189,20 +215,30 @@ pub async fn display_ogp() {
                         }
                     }
                     if !url_is_empty {
-                        let state_clone = Arc::clone(&state); // Arc をクローン
+                        let state_clone = Arc::clone(&state);
                         let client_clone = client.clone();
-                        task::spawn(async move {
+                        let tx_clone = tx.clone();
+
+                        tokio::spawn(async move {
                             update_ogp(state_clone, client_clone).await;
+                            let _ = tx_clone.send(());
                         });
+                    } else {
+                        let _ = tx.send(());
                     }
                 }
                 KeyCode::Esc => break,
                 _ => {}
             }
+
+            if should_update {
+                let _ = tx.send(());
+            }
         }
     }
 
     disable_raw_mode().unwrap();
+    let mut terminal = terminal.lock().await;
     execute!(terminal.backend_mut(), LeaveAlternateScreen).unwrap();
     terminal.show_cursor().unwrap();
 }
