@@ -73,15 +73,22 @@ impl UI {
 
     fn draw_ui(f: &mut ratatui::Frame, state: &AppState) {
         let size = f.area();
-        let chunks = Layout::default()
+        let vertical_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Percentage(97)])
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Percentage(40),
+                Constraint::Percentage(60),
+            ])
             .split(size);
 
-        let sub_chunks = Layout::default()
+        let image_and_info_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(33), Constraint::Percentage(67)])
-            .split(chunks[1]);
+            .constraints([
+                Constraint::Ratio(1, 3),
+                Constraint::Ratio(2, 3),
+            ])
+            .split(vertical_chunks[1]);
 
         let mut url_display = state.url.clone();
         if state.cursor_position <= state.url.len() {
@@ -91,33 +98,50 @@ impl UI {
         let url_input = Paragraph::new(url_display)
             .block(Block::default().borders(Borders::ALL).title("Enter URL"))
             .style(Style::default());
-        f.render_widget(url_input, chunks[0]);
+        f.render_widget(url_input, vertical_chunks[0]);
 
         if let Some(error_message) = &state.error_message {
             let error_paragraph = Paragraph::new(error_message.clone())
                 .block(Block::default().borders(Borders::ALL).title("Error"))
                 .style(Style::default().fg(Color::Red));
-            f.render_widget(error_paragraph, sub_chunks[1]);
+            f.render_widget(error_paragraph, image_and_info_chunks[1]);
         } else if let Some(info) = &state.ogp_info {
-            let meta_info = format!(
-                "Title: {}\nDescription: {}\nImage: {}\nMetadata: {} items",
+            let ogp_info_display = format!(
+                "Title: {}\nDescription: {}\nImage URL: {}\nMetadata Count: {}",
                 info.title,
                 info.description,
                 info.image,
                 info.metadata.len()
             );
 
-            let meta_paragraph = Paragraph::new(meta_info)
-                .block(Block::default().borders(Borders::ALL).title("OGP Info"));
-            f.render_widget(meta_paragraph, sub_chunks[1]);
+            let ogp_info_paragraph = Paragraph::new(ogp_info_display)
+                .block(Block::default().borders(Borders::ALL).title("OGP Info"))
+                .style(Style::default());
+            f.render_widget(ogp_info_paragraph, image_and_info_chunks[1]);
 
             if let Some(cached_image) = &state.cached_image {
-                UI::draw_image_with_colors(f, sub_chunks[0], cached_image);
+                UI::draw_image_with_colors(f, image_and_info_chunks[0], cached_image);
             } else {
                 let empty_paragraph = Paragraph::new("No image available")
                     .block(Block::default().borders(Borders::ALL).title("Image"));
-                f.render_widget(empty_paragraph, sub_chunks[0]);
+                f.render_widget(empty_paragraph, image_and_info_chunks[0]);
             }
+        }
+
+        if let Some(info) = &state.ogp_info {
+            let metadata_to_display = info
+                .metadata
+                .iter()
+                .skip(state.metadata_offset)
+                .take((vertical_chunks[2].height - 2) as usize)
+                .map(|(tag, content)| format!("{}: {}", tag, content))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let metadata_paragraph = Paragraph::new(metadata_to_display)
+                .block(Block::default().borders(Borders::ALL).title("Metadata"))
+                .style(Style::default());
+            f.render_widget(metadata_paragraph, vertical_chunks[2]);
         }
     }
 
@@ -179,6 +203,20 @@ impl UI {
                 if state.cursor_position < state.url.len() {
                     state.cursor_position += 1;
                     self.tx.send(()).unwrap();
+                }
+            }
+            KeyCode::Up => {
+                if state.metadata_offset > 0 {
+                    state.metadata_offset -= 1;
+                    self.tx.send(()).unwrap();
+                }
+            }
+            KeyCode::Down => {
+                if let Some(info) = &state.ogp_info {
+                    if state.metadata_offset + 1 < info.metadata.len() {
+                        state.metadata_offset += 1;
+                        self.tx.send(()).unwrap();
+                    }
                 }
             }
             KeyCode::Enter => {

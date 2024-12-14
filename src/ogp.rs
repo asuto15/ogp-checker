@@ -19,6 +19,7 @@ pub struct AppState {
     pub ogp_info: Option<OGPInfo>,
     pub cached_image: Option<Image>,
     pub error_message: Option<String>,
+    pub metadata_offset: usize,
 }
 
 impl AppState {
@@ -29,9 +30,11 @@ impl AppState {
             ogp_info: None,
             cached_image: None,
             error_message: None,
+            metadata_offset: 0,
         }
     }
 }
+
 
 pub fn normalize_url(url: &str) -> String {
     if url.starts_with("http://") || url.starts_with("https://") {
