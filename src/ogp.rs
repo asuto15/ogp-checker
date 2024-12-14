@@ -31,13 +31,13 @@ impl AppState {
             error_message: None,
         }
     }
+}
 
-    pub fn normalize_url(&self) -> String {
-        if self.url.starts_with("http://") || self.url.starts_with("https://") {
-            self.url.clone()
-        } else {
-            format!("http://{}", self.url)
-        }
+pub fn normalize_url(url: &str) -> String {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        url.to_string()
+    } else {
+        format!("http://{}", url)
     }
 }
 
@@ -45,7 +45,7 @@ pub async fn update_ogp(state: Arc<Mutex<AppState>>, client: Client) {
     let url;
     {
         let state = state.lock().await;
-        url = state.normalize_url();
+        url = normalize_url(&state.url);
     }
 
     let ogp_result = fetch_ogp_info(&client, &url).await;
@@ -68,7 +68,7 @@ pub async fn update_ogp(state: Arc<Mutex<AppState>>, client: Client) {
     }
 }
 
-async fn fetch_ogp_info(client: &Client, url: &str) -> Result<OGPInfo, reqwest::Error> {
+pub async fn fetch_ogp_info(client: &Client, url: &str) -> Result<OGPInfo, reqwest::Error> {
     let res = client.get(url).send().await?.text().await?;
     let document = Html::parse_document(&res);
 
