@@ -61,6 +61,8 @@ impl UI {
                 if self.handle_input(key_event.code).await {
                     break;
                 }
+            } else if let Event::Resize(_, _) = event::read()? {
+                self.tx.send(()).unwrap();
             }
         }
 
