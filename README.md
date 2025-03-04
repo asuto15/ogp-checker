@@ -36,11 +36,27 @@ OGP Checker is a terminal-based application that fetches and displays Open Graph
 
 ## Usage
 
-1. Launch the application.
+```
+Usage: ogp-checker [OPTIONS] [URL]
+
+Arguments:
+  [URL]  [default: ]
+
+Options:
+  -j, --json
+  -h, --help     Print help
+  -V, --version  Print version
+```
+### TUI Mode
+1. Launch the application with no argument.
 2. Enter a URL in the "Enter URL" input box.
 3. Press `Enter` to fetch the OGP metadata.
 4. View the metadata and image displayed in the terminal.
 5. Press `Esc` to exit the application.
+
+### CUI Mode
+1. Run the application with arguments that includes URL and option flags.
+2. Then, outputs will be displayed in terminal.
 
 ### Supported URL Formats
 
