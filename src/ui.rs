@@ -86,10 +86,7 @@ impl UI {
 
         let image_and_info_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Ratio(1, 3),
-                Constraint::Ratio(2, 3),
-            ])
+            .constraints([Constraint::Ratio(1, 3), Constraint::Ratio(2, 3)])
             .split(vertical_chunks[1]);
 
         let mut url_display = state.url.clone();

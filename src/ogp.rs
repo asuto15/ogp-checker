@@ -2,17 +2,19 @@ use crate::image::Image;
 use image::DynamicImage;
 use reqwest::Client;
 use scraper::{Html, Selector};
-use std::{io, sync::Arc};
+use serde::Serialize;
+use std::{collections::HashMap, io, sync::Arc};
 use tokio::sync::Mutex;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct OGPInfo {
     pub title: String,
     pub description: String,
     pub image: String,
-    pub metadata: Vec<(String, String)>,
+    pub metadata: HashMap<String, String>,
 }
 
+#[derive(Default)]
 pub struct AppState {
     pub url: String,
     pub cursor_position: usize,
@@ -34,7 +36,6 @@ impl AppState {
         }
     }
 }
-
 
 pub fn normalize_url(url: &str) -> String {
     if url.starts_with("http://") || url.starts_with("https://") {
@@ -72,7 +73,13 @@ pub async fn update_ogp(state: Arc<Mutex<AppState>>, client: Client) {
 }
 
 pub async fn fetch_ogp_info(client: &Client, url: &str) -> Result<OGPInfo, reqwest::Error> {
-    let res = client.get(url).send().await?.text().await?;
+    let res = client
+        .get(url)
+        .header("User-Agent", "bot")
+        .send()
+        .await?
+        .text()
+        .await?;
     let document = Html::parse_document(&res);
 
     let title = document
@@ -96,23 +103,18 @@ pub async fn fetch_ogp_info(client: &Client, url: &str) -> Result<OGPInfo, reqwe
         .unwrap_or("")
         .to_string();
 
-    let metadata = document
-        .select(&Selector::parse("meta").unwrap())
-        .filter_map(|e| {
-            let tag = e
-                .value()
-                .attr("property")
-                .or_else(|| e.value().attr("name"))
-                .unwrap_or("")
-                .to_string();
-            let content = e.value().attr("content").unwrap_or("").to_string();
-            if !tag.is_empty() {
-                Some((tag, content))
-            } else {
-                None
+    let mut metadata = HashMap::new();
+    for e in document.select(&Selector::parse("meta").unwrap()) {
+        if let Some(tag) = e
+            .value()
+            .attr("property")
+            .or_else(|| e.value().attr("name"))
+        {
+            if let Some(content) = e.value().attr("content") {
+                metadata.insert(tag.to_string(), content.to_string());
             }
-        })
-        .collect();
+        }
+    }
 
     Ok(OGPInfo {
         title,

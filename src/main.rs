@@ -13,6 +13,9 @@ use ui::UI;
 struct Args {
     #[arg(default_value = "")]
     url: String,
+
+    #[arg(short, long)]
+    json: bool,
 }
 
 #[tokio::main]
@@ -22,7 +25,16 @@ async fn main() {
     if !args.url.is_empty() {
         let client = reqwest::Client::new();
         match fetch_ogp_info(&client, &normalize_url(&args.url)).await {
-            Ok(ogp_info) => print_ogp_info(&ogp_info),
+            Ok(ogp_info) => {
+                if args.json {
+                    match serde_json::to_string_pretty(&ogp_info) {
+                        Ok(json) => println!("{}", json),
+                        Err(e) => eprintln!("Error serializing OGP info: {}", e),
+                    }
+                } else {
+                    print_ogp_info(&ogp_info);
+                }
+            }
             Err(e) => eprintln!("Error fetching OGP info: {}", e),
         }
     } else {
